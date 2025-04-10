@@ -1,4 +1,5 @@
 # Reed-Muller Decoder 
+Group Members: Adwita(2203303), Lakshay(2203312), Jash(2203308)
 
 A user-friendly Python-based GUI application to decode Reed-Muller codes using majority logic. Built with `customtkinter`, the interface allows users to input parameters and a codeword, visualize decoding steps, simulate errors, and understand the decoding process interactively.
 
