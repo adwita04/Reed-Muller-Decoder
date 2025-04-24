@@ -9,6 +9,7 @@ from math import comb
 from itertools import combinations, product
 from tkinter import messagebox
 
+
 # DPI Awareness
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -32,102 +33,131 @@ cafiloser_button = ("Cafiloser", 14) if os.path.exists(font_path_cafiloser) else
 mont_input = ("Montserrat", 14) if os.path.exists(font_path_mont) else ("Arial", 12)
 mont_output = ("Montserrat", 18, "bold") if os.path.exists(font_path_mont) else ("Arial", 12)
 
-# Functions
-
-def dec_to_binary(n, v):
-    return format(n, f'0{v}b')
-
-# Find Coefficient using Majority Logic 
-def find_coeff(mon, evals, var):
-    coeff = {}
-    ans = ''
-    steps = []  
-
-    for pol, m in enumerate(mon):
-        if pol == len(mon)-1:
-            continue
-
-        part_ass, comp = [], []
-        for idx, i in enumerate(m):
-            (part_ass if i == 0 else comp).append(idx)
-
-        bags, v = {}, {}
-        count_1, count_0 = 0, 0
-
-        for i in product(range(2), repeat=len(part_ass)):
-            tot = 0
-            for t, j in enumerate(part_ass):
-                v[j] = i[t]
-            for y in product(range(2), repeat=len(comp)):
-                for t0, z in enumerate(comp):
-                    v[z] = y[t0]
-                to_eval = ''.join(str(v[s]) for s in range(var))
-                tot ^= int(evals[to_eval])
-            key = ''.join(str(i[t]) for t in range(len(part_ass)))
-            bags[key] = tot
-            if tot == 1:
-                count_1 += 1
+class ReedMullerDecoder:
+    def __init__(self, r=2, m=4):
+        self.r = r  # degree of polynomial
+        self.m = m  # number of variables
+        self.n = 2**m  # code length
+        
+        # Generate all monomials in order (degree r first, then r-1, ..., 0)
+        self.monomials = []
+        self.monomial_strings = []
+        
+        for degree in range(r, -1, -1):
+            for vars in combinations(range(1, m+1), degree):
+                self.monomials.append(vars)
+                if len(vars) == 0:
+                    self.monomial_strings.append("1")
+                else:
+                    self.monomial_strings.append("X" + "X".join(map(str, vars)))
+        
+        # Initialize steps storage
+        self.calculation_steps = []
+    
+    def evaluate_monomial(self, monomial, x):
+        """Evaluate a monomial at point x (x is a binary tuple of length m)"""
+        result = 1
+        for var in monomial:
+            result *= x[var-1]
+        return result
+    
+    def get_valuation(self, monomial):
+        """Get the valuation vector for a monomial (all possible inputs)"""
+        valuation = []
+        for i in range(self.n):
+            x = tuple((i >> (self.m - j - 1)) & 1 for j in range(self.m))
+            valuation.append(self.evaluate_monomial(monomial, x))
+        return valuation
+    
+    def decode(self, received_word):
+        """Decode a received word using majority logic"""
+        current_code = list(received_word.copy())
+        polynomial = {}
+        decoded_message = []
+        self.calculation_steps = []  # Reset steps for each decode
+        
+        for monomial, monomial_str in zip(self.monomials, self.monomial_strings):
+            step_info = {
+                'monomial': monomial_str,
+                'ones': 0,
+                'zeros':0,
+                'coefficient': None
+            }
+            
+            # Determine fixed and varying variables
+            all_vars = set(range(1, self.m+1))
+            monomial_vars = set(monomial)
+            fixed_vars = list(all_vars - monomial_vars)
+            
+            sums = []
+            
+            # Generate all possible fixed variable assignments
+            for fixed_assignment in product([0, 1], repeat=len(fixed_vars)):
+                assignment_info = {
+                }
+                
+                total = 0
+                # Generate all possible varying assignments
+                for varying_assignment in product([0, 1], repeat=len(monomial)):
+                    # Build complete assignment
+                    assignment = [0] * self.m
+                    # Set fixed variables
+                    for var, val in zip(fixed_vars, fixed_assignment):
+                        assignment[var-1] = val
+                    # Set varying variables
+                    for var, val in zip(monomial, varying_assignment):
+                        assignment[var-1] = val
+                    # Convert to index
+                    index = 0
+                    for j in range(self.m):
+                        index = (index << 1) | assignment[j]
+                    
+                    total += current_code[index]
+                
+                sum_value = total % 2
+                sums.append(sum_value)
+            
+            # Determine coefficient by majority vote
+            ones = sum(sums)
+            zeros = len(sums) - ones
+            if ones > zeros:
+                coefficient = 1
+            elif zeros > ones:
+                coefficient = 0
             else:
-                count_0 += 1
+                coefficient = 0  # tie-breaker
+            
+            step_info['ones'] = ones
+            step_info['zeros'] = zeros
+            step_info['coefficient'] = coefficient
+            self.calculation_steps.append(step_info)
+            
+            polynomial[monomial_str] = coefficient
+            decoded_message.append(coefficient)
+            
+            # Update current code if coefficient is 1
+            if coefficient == 1:
+                valuation = self.get_valuation(monomial)
+                for i in range(self.n):
+                    current_code[i] = (current_code[i] - valuation[i]) % 2
+        
+        return polynomial, current_code, decoded_message
+    
+    def print_calculation_steps(self):
+        steps = '\nDetailed Calculation Steps:\n'
+        for step in self.calculation_steps:
+            steps += f"\nMonomial: {step['monomial']}"
+            steps+=f"\nMajority vote (1s: {step['ones']}, 0s: {step['zeros']})"
+            steps+=f" → Coefficient: {step['coefficient']}\n"
+            steps+="-"*50
+        return steps
 
-        majority = 1 if count_1 > count_0 else 0
-        coeff[pol] = majority
-        ans += '1' if majority else '0'
 
-        # Generate human-readable monomial like x1x3
-        term = ''.join([f"x{idx+1}" for idx, val in enumerate(m) if val == 1]) or "1"
-
-        steps.append(
-            f"Monomial {pol + 1} ({term}):\n"
-            f"Binary: {''.join(map(str, m))}\n"
-            f"Assignments with 1s: {count_1}, 0s: {count_0}\n"
-            f"Majority = {majority}\n"
-        )
-
-
-    # Constant term
-    maj_bag = []
-    for bits in product(range(2), repeat=var):
-        r = int(evals[''.join(map(str, bits))])
-        f_val = 0
-        for i, monomial in enumerate(mon):
-            if i == len(mon)-1:
-                continue
-            term_val = 1
-            for j in range(var):
-                if monomial[j] == 1:
-                    term_val &= bits[j]
-            f_val ^= (coeff[i] * term_val)
-        maj_bag.append(r ^ f_val)
-
-    count_1 = maj_bag.count(1)
-    count_0 = maj_bag.count(0)
-    a_0 = 1 if count_1 > count_0 else 0
-    ans += '1' if a_0 else '0'
-    ans = ans[::-1]
-
-    steps.append(
-        f"Constant Term (Final Majority Check):\n"
-        f"Total 1s: {count_1}, 0s: {count_0}\n"
-        f"a_0 = {a_0}"
-    )
-
-    return ans, coeff, steps
-
-# Main Decoder function
-def decoder(t, v, codeword):
-    n = 1 << v
-    evals = {format(i, f'0{v}b'): codeword[i] for i in range(n)}
-    monomials = []
-    for d in range(t + 1):
-        for combo in combinations(range(v), d):
-            monomial = [0] * v
-            for i in combo:
-                monomial[i] = 1
-            monomials.append(monomial)
-    monomials.reverse()
-    return monomials, evals
-
+def arr_to_string(a):
+    s =''
+    for i in range(len(a)):
+        s+= '0' if a[i] == 0 else '1'
+    return s
 # Generate Parity Generator Matrix
 def generate_pgm(r, m):
     monomials = [mask for mask in product([0, 1], repeat=m) if sum(mask) <= r]
@@ -136,26 +166,6 @@ def generate_pgm(r, m):
         int(all(inp[i] if mono[i] else 1 for i in range(m))) for inp in inputs
     ] for mono in monomials]
     return np.array(G), monomials
-
-# Encode message using PGM
-def encode_message(message_str, generator_matrix):
-    message_bits = np.array([int(b) for b in message_str])
-    codeword = np.dot(message_bits, generator_matrix) % 2
-    return ''.join(str(int(b)) for b in codeword)
-
-# Find Errors
-def find_error_positions(encoded_str, received_str):
-    error_mask = ''.join('1' if a != b else '0' for a, b in zip(encoded_str, received_str))
-    return error_mask, [i for i, bit in enumerate(error_mask) if bit == '1']
-
-# Find Polynomial message
-def polynomial_string(coeffs, monomials):
-    terms = []
-    for c, m in zip(coeffs, monomials[::-1]):
-        if c:
-            term = ''.join([f"x{i+1}" for i in range(len(m)) if m[i] == 1])
-            terms.append(term if term else '1')
-    return ' + '.join(terms)
 
 # Function decode the message 
 def decode_action():
@@ -167,35 +177,57 @@ def decode_action():
     try:
         t, v = int(entries[0].get()), int(entries[1].get())
         codeword = entries[2].get().strip()
+        received_word = [int(bit) for bit in codeword]
+
         if len(codeword) != 2 ** v:
             decoded_label.configure(text="Codeword length must be 2^v")
             return
+        
+        rm = ReedMullerDecoder(t, v)
+        polynomial,error_vec, decoded_str = rm.decode(received_word)
 
-        mon, evals = decoder(t, v, codeword)
-        decoded_str, coeff_dict, decoding_steps = find_coeff(mon, evals, v)
-        G, monomials = generate_pgm(t, v)
-        encoded = encode_message(decoded_str, G)
-        error_mask, indices = find_error_positions(encoded, codeword)
+        G = generate_pgm(t, v)
+        
+        decoded_frame.configure(border_color="#1D2450", fg_color='#CDC3DB', border_width=2)
+        poly_terms = []
+        for monom, coeff in polynomial.items():
+            if coeff == 1:
+                poly_terms.append(monom)
+
+        poly_expr = " + ".join(poly_terms) if poly_terms else "0"
+        decoded_label.configure(text=f"{arr_to_string(decoded_str)}")
+        polynomial_label.configure(text=f"Polynomial: f(x) = {poly_expr}")
+        
+
+        err =[]
+        no_err = 0
+        for i in range(len(error_vec)):
+            if error_vec[i] == 1:
+                err.append(i)
+                no_err += 1
+                
+        corr_str = received_word
+
+        for i in err:
+            corr_str[i] = 1 if received_word[i] == 0 else 0
+
 
         max_errors = (2 ** (v - t) - 1) // 2
-        if len(indices) > max_errors:
-            messagebox.showerror("Too Many Errors", 
-                                 f"Maximum correctable errors for RM({t},{v}) is {max_errors}.\n"
-                                 f"Detected {len(indices)} errors which exceeds this limit.")
-            return
-        decoded_frame.configure(border_color="#1D2450", fg_color='#CDC3DB', border_width=2)
-        poly_expr = polynomial_string([int(b) for b in decoded_str], mon)
-        decoded_label.configure(text=f"{decoded_str}")
-        polynomial_label.configure(text=f"Polynomial: f(x) = {poly_expr}")
-        process_steps_text = "\n\n".join(decoding_steps)
-        steps_label.configure(text=f"{process_steps_text}")
-
-        if not indices:
+        if no_err == 0: 
             error_label.configure(text="No error", text_color="#0B6B35")
             orig_label.configure(text="")
+        elif no_err > max_errors:
+            messagebox.showerror("Too Many Errors", 
+                                 f"Maximum correctable errors for RM({t},{v}) is {max_errors}.\n"
+                                 f"Detected {no_err} errors which exceeds this limit.")
+            return
         else:
-            error_label.configure(text=f"Error at Positions: {indices}", text_color="#8E0608")
-            orig_label.configure(text=f"Original Codeword: {encoded}", text_color="#1D2450")
+            error_label.configure(text=f"Error at Positions: {err}", text_color="#8E0608")
+            orig_label.configure(text=f"Original Codeword: {arr_to_string(corr_str)}", text_color="#1D2450")
+
+        process_steps_text = rm.print_calculation_steps()
+        steps_label.configure(text=f"{process_steps_text}")
+
 
     except Exception as e:
         decoded_label.configure(text=f"Error: {e}")
@@ -270,11 +302,11 @@ def simulate_error():
 # Function to load sample inputs
 def load_sample():
     entries[0].delete(0, "end")
-    entries[0].insert(0, "1")
+    entries[0].insert(0, "2")
     entries[1].delete(0, "end")
     entries[1].insert(0, "4")
     entries[2].delete(0, "end")
-    entries[2].insert(0, "1100001111000011")
+    entries[2].insert(0, "0111100001001011")
 
 
 # GUI Layout
